@@ -7,7 +7,7 @@ The language model (via OpenRouter) is used only for grounded tasks: `/ask`, `/l
 ## Features
 
 * **Mod log** — message edits, deletes, bulk deletes, bans and unbans, as embeds in a log channel. Toggles: `ModLogEdits`, `ModLogDeletes`, `ModLogIgnoredChannels`, `ModLogEditMinChange` (skip trivial edits).
-* **User records** — SQLite history per member: spam/flood flags, honeypot trips, safety flags, moderator notes. `!record`, `!note`, `!whois`.
+* **User records** — SQLite history per member: spam/flood flags, honeypot trips, safety flags, moderator notes. `!record`, `!note`, `!whois`, `!forget` (erase a member's data on request). Message excerpts are encrypted at rest with a key in `record.key` (generated on first run, keep it backed up) and blanked after `RecordExcerptDays` (default 30).
 * **Safety monitor** — every server message (and the replies of any bot listed in `SafetyMonitorBotIDs`) runs through a filter for sexualised-minor content. A hit writes a record and alerts the mod channel; only terms with no innocent use page `@here`. **Nothing is deleted and nobody is punished automatically.** The filter is the same code as the chat filter in IsabellBot; keep the two in sync.
 * **Spam & flood** — invite/scam links from new accounts, the same message across several channels.
 * **Honeypot** — anyone posting in the trap channel is softbanned (or banned) and their recent messages wiped. Owner, admins and exempt roles are ignored.
@@ -46,6 +46,7 @@ Config is read from `$BOT_CONFIG`, else `Config.json`, else `Barnabus.json`. It 
 |---|---|---|
 | `Barnabus.json` | real config with token and key | no |
 | `barnabus.db` | records, XP, highlights | no |
+| `record.key` | encryption key for stored excerpts | no |
 | `game_faq.txt` | `Q:`/`A:` blocks, one per paragraph | no |
 | `world_lore.txt` | markdown lore, `##`/`###` sections | no |
 | `app.log` | rotating daily log | no |

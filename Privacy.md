@@ -6,7 +6,7 @@ Barnabus is a moderation and community bot operated by the Wicked Island Discord
 
 ## 1. What the bot collects
 
-**Moderation records.** When the bot flags a message (spam or scam link, cross-channel flooding, honeypot trip, or a safety-filter match) it stores the member's Discord user ID, the kind of flag, a text excerpt of up to 500 characters, and the time. Moderators can also attach free-text notes to a member's record. These records exist so that staff can see a member's history before making a decision.
+**Moderation records.** When the bot flags a message (spam or scam link, cross-channel flooding, honeypot trip, or a safety-filter match) it stores the member's Discord user ID, the kind of flag, a text excerpt of up to 500 characters, and the time. Moderators can also attach free-text notes to a member's record. These records exist so that staff can see a member's history before making a decision. **Excerpts are encrypted at rest and erased automatically after 30 days.** The record's kind and time remain so that staff can still see how often a member was flagged.
 
 **Activity counters.** For the XP and rank system the bot stores each member's user ID, current display name, XP total, level, message count and the time of the last award. No message content is stored for this purpose.
 
@@ -46,7 +46,8 @@ Every other flag, including safety-filter matches, results only in a record and 
 
 | Data | Kept for |
 |---|---|
-| Moderation records and notes | until a moderator deletes them or the member's data is removed on request |
+| Message excerpts in moderation records | 30 days, then erased automatically |
+| Moderation record entries (kind, time) and moderator notes | until a moderator deletes them or the member's data is removed on request |
 | XP and rank data | while the member is in the server; removable on request |
 | Highlight message IDs | indefinitely (IDs only, no content) |
 | Message cache | in memory only, lost on restart |
@@ -54,11 +55,11 @@ Every other flag, including safety-filter matches, results only in a record and 
 
 ## 6. Where data is stored
 
-All persistent data lives in a single database file on the server that runs the bot, accessible only to the operator. It is not shared with other servers, other bots or any third party other than as described in section 3.
+All persistent data lives in a single database file on the server that runs the bot, accessible only to the operator. Stored message excerpts are encrypted with a key held separately from the database. It is not shared with other servers, other bots or any third party other than as described in section 3.
 
 ## 7. Your rights
 
-You can ask the server's moderation team to show you what the bot holds about you, or to delete it. Deletion removes your moderation records, notes and XP data. Contact the server staff through the server's moderation channels or by DM to a moderator.
+You can ask the server's moderation team to show you what the bot holds about you, or to delete it. Deletion removes your moderation records, notes and XP data; moderators do this with a single command. Contact the server staff by DM to any moderator in the server, or by email at the address listed on the bot's application page.
 
 ## 8. Changes
 

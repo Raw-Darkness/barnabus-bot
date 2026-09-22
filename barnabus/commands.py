@@ -7,11 +7,11 @@ from datetime import datetime, timezone, timedelta
 import discord
 
 from . import core
-from .db import add_user_record, get_user_records, summarize_user_record_counts
+from .db import add_user_record, delete_user_data, get_user_records, summarize_user_record_counts
 from .moderation import flag_history, is_privileged
 
 _OWNER_COMMANDS = {"!reload"}
-_MOD_COMMANDS = {"!summary", "!activity", "!whois", "!flags", "!search", "!note", "!record", "!checkperms", "!help"}
+_MOD_COMMANDS = {"!summary", "!activity", "!whois", "!flags", "!search", "!note", "!record", "!forget", "!checkperms", "!help"}
 
 
 def is_command_channel(message: discord.Message) -> bool:
@@ -252,6 +252,16 @@ async def handle_bot_command(message: discord.Message) -> bool:
             await ch.send(chunk, allowed_mentions=discord.AllowedMentions.none())
         return True
 
+    if cmd == "!forget":
+        target = core.parse_user_ref(arg)
+        if not target:
+            await ch.send("Usage: `!forget <user_id or @mention>` — erases the member's records, notes and XP (data deletion request).")
+            return True
+        r, x = delete_user_data(target)
+        logging.info("Data deletion for %s by %s: %d records, %d xp rows", target, message.author, r, x)
+        await ch.send(f"🧹 Erased {r} record(s) and {x} XP row(s) for `{target}`.")
+        return True
+
     if cmd == "!checkperms":
         report = permission_report()
         for chunk in core.chunks(report):
@@ -268,6 +278,7 @@ async def handle_bot_command(message: discord.Message) -> bool:
             "`!search <term>` — search messages (last 24h)\n"
             "`!note <user> <text>` — add a note to a user's record\n"
             "`!record <user>` — show a user's record (flags, honeypot trips, notes)\n"
+            "`!forget <user>` — erase a member's records, notes and XP (deletion request)\n"
             "`!checkperms` — verify the bot's permissions in every configured channel\n"
             "`!help` — this message\n"
             "Public: `!rank [user]`, `!top`; slash: `/ask`, `/wiki`, `/lore`; right-click → Apps → Translate"

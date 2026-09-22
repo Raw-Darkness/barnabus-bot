@@ -1,6 +1,7 @@
 # real config & secrets — never commit
 Config.json
 Barnabus.json
+record.key
 .env
 
 # runtime state & user data

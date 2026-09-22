@@ -8,7 +8,7 @@ import sys
 
 import discord
 
-from . import core, lore, faq, stats, summary
+from . import core, db, lore, faq, stats, summary
 from . import wiki, translate, highlights  # noqa: F401  (register commands/events)
 from .commands import handle_bot_command, permission_report
 from .moderation import check_flood, check_spam, honeypot_guard
@@ -29,7 +29,7 @@ async def on_ready():
             logging.info("Permission check:\n%s", permission_report().replace("**", ""))
         except Exception:
             logging.exception("Permission check failed")
-        for coro in (_config_watch(), _sync_commands(), _faq_loop(), stats.loop(), summary.scheduler()):
+        for coro in (_config_watch(), _sync_commands(), _faq_loop(), stats.loop(), summary.scheduler(), _expire_loop()):
             core.bot.loop.create_task(coro)
 
 
@@ -103,6 +103,17 @@ async def _faq_loop():
         except Exception:
             logging.exception("FAQ scan failed")
         await asyncio.sleep(600)
+
+
+async def _expire_loop():
+    """Blank stored message excerpts past their retention, once an hour."""
+    await core.bot.wait_until_ready()
+    while not core.bot.is_closed():
+        try:
+            db.expire_excerpts()
+        except Exception:
+            logging.exception("Excerpt expiry failed")
+        await asyncio.sleep(3600)
 
 
 async def _config_watch():
