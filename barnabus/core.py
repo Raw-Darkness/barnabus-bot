@@ -91,8 +91,12 @@ def ignored_users() -> set[int]: return cfg_ids("IgnoredUsers")
 
 # ---- Discord client --------------------------------------------------------
 intents = discord.Intents.default()
-intents.message_content = True
 intents.guilds = True
+# Message Content is privileged: Discord must approve it for this application.
+# Until then the bot can run with EnableMessageContentIntent false — honeypot,
+# XP, highlights, stats, mod-log ban events, slash commands and DM commands all
+# work without it; anything that reads guild message text does not.
+intents.message_content = bool(config.get("EnableMessageContentIntent", True))
 # !whois by name and accurate member counts want the privileged Server Members
 # intent — enable it in the developer portal FIRST, then set EnableMembersIntent.
 if config.get("EnableMembersIntent"):

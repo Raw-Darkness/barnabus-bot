@@ -152,3 +152,8 @@ def main() -> None:
         logging.error("Discord rejected the token. Reset it in the Developer Portal, put it in %s, restart. Not retrying.",
                       core.CONFIG_PATH)
         sys.exit(78)
+    except discord.PrivilegedIntentsRequired:
+        logging.error("A privileged intent is enabled in %s but not approved in the Developer Portal "
+                      "(Bot tab). Either enable it there or set EnableMessageContentIntent / EnableMembersIntent "
+                      "to false. Not retrying.", core.CONFIG_PATH)
+        sys.exit(78)

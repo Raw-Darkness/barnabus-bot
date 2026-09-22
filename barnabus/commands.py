@@ -66,7 +66,8 @@ def permission_report() -> str:
             lacking = [p for p in needs if not getattr(perms, p)]
             lines.append(f"{'✅' if not lacking else '❌'} {label} <#{cid}>" + (f": missing {', '.join(lacking)}" if lacking else ""))
         if not core.bot.intents.message_content:
-            lines.append("❌ Message Content intent is off")
+            lines.append("⚠️ Message Content intent is off: mod log text, spam/flood, safety monitor, "
+                         "!search/!whois counts and text commands in channels are inactive until Discord approves it")
     return "\n".join(lines) or "Not in any server."
 
 

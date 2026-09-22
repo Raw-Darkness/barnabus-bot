@@ -17,6 +17,7 @@
     "OwnerID": 0,
     "IgnoredUsers": [],
     "IgnoredWords": [],
+    "EnableMessageContentIntent": true,
     "EnableMembersIntent": false,
     "ModChannelID": 0,
     "ModRoleID": 0,

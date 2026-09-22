@@ -35,7 +35,7 @@ Config is read from `$BOT_CONFIG`, else `Config.json`, else `Barnabus.json`. It 
 ### Discord application
 
 1. Developer Portal → New Application → Bot. Copy the token into the config.
-2. Privileged intents: **Message Content** (required). **Server Members** only if you set `EnableMembersIntent` (needed for `!whois` by name).
+2. Privileged intents: **Message Content** (required for moderation). Discord may require the "Request Intents" form before it can be enabled; until it is approved, set `EnableMessageContentIntent: false` and the bot runs in a reduced mode (honeypot, XP, highlights, stats, ban/unban log, slash commands, DM commands). **Server Members** only if you set `EnableMembersIntent` (needed for `!whois` by name).
 3. Invite with scopes `bot` + `applications.commands` and these permissions: View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Add Reactions, Manage Messages, Manage Roles, Manage Channels, Ban Members, Kick Members, View Audit Log.
 4. Put the bot's role **above** every rank role it hands out, and give it access to the mod, mod-log, honeypot, highlights, questions-forum and stats channels. The invite grants server-wide permissions, but a private channel that hides `@everyone` also hides the bot until its role gets an override there. Run `!checkperms` in the mod channel to see exactly what is missing; the same report is written to the log at startup.
 5. `AppCommandGuildID` makes slash commands register instantly for that server; leave `0` for global (up to an hour).
