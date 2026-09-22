@@ -50,6 +50,10 @@ Config is read from `$BOT_CONFIG`, else `Config.json`, else `Barnabus.json`. It 
 | `world_lore.txt` | markdown lore, `##`/`###` sections | no |
 | `app.log` | rotating daily log | no |
 
+## Privacy
+
+What the bot stores, what leaves the machine and for how long is in [Privacy.md](Privacy.md).
+
 ## Deploying
 
 See [deploy/VPS.md](deploy/VPS.md) for a systemd install on a small Linux VPS. The bot needs only outbound network access.
