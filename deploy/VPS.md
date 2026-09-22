@@ -6,7 +6,7 @@ Any small Linux box works: 1 vCPU, 1 GB RAM, a few GB of disk. A Hetzner CX22 or
 # as root on a fresh Ubuntu 24.04
 apt update && apt install -y python3-venv git
 useradd -r -m -d /opt/barnabus -s /usr/sbin/nologin barnabus
-sudo -u barnabus git clone git@github.com:Raw-Darkness/BarnabusBot.git /opt/barnabus/src
+sudo -u barnabus git clone git@github.com:Raw-Darkness/barnabus-bot.git /opt/barnabus/src
 cd /opt/barnabus/src
 sudo -u barnabus python3 -m venv /opt/barnabus/venv
 sudo -u barnabus /opt/barnabus/venv/bin/pip install -r requirements.txt
