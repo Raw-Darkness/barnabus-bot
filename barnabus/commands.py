@@ -11,7 +11,7 @@ from .db import add_user_record, get_user_records, summarize_user_record_counts
 from .moderation import flag_history, is_privileged
 
 _OWNER_COMMANDS = {"!reload"}
-_MOD_COMMANDS = {"!summary", "!activity", "!whois", "!flags", "!search", "!note", "!record", "!help"}
+_MOD_COMMANDS = {"!summary", "!activity", "!whois", "!flags", "!search", "!note", "!record", "!checkperms", "!help"}
 
 
 def is_command_channel(message: discord.Message) -> bool:
@@ -21,6 +21,53 @@ def is_command_channel(message: discord.Message) -> bool:
 def _tz():
     from .summary import summary_tz
     return summary_tz()
+
+
+# Which permissions each configured channel needs, so a missing override is
+# reported by name instead of surfacing later as a silent failure.
+_CHANNEL_NEEDS: list[tuple[str, str, tuple[str, ...]]] = [
+    ("ModChannelID", "mod channel", ("view_channel", "send_messages", "read_message_history", "embed_links")),
+    ("ModLogChannelID", "mod log", ("view_channel", "send_messages", "embed_links")),
+    ("HoneypotChannelID", "honeypot", ("view_channel", "read_message_history", "manage_messages")),
+    ("HighlightsChannelID", "highlights", ("view_channel", "send_messages", "embed_links", "attach_files")),
+    ("QuestionsForumID", "questions forum", ("view_channel", "send_messages_in_threads", "read_message_history")),
+    ("StatsMemberChannelID", "member stats channel", ("view_channel", "manage_channels")),
+    ("StatsPlayersChannelID", "players stats channel", ("view_channel", "manage_channels")),
+    ("XPAnnounceChannelID", "level-up channel", ("view_channel", "send_messages")),
+]
+_GUILD_NEEDS = ("ban_members", "kick_members", "manage_roles", "manage_channels", "manage_messages", "view_audit_log")
+
+
+def permission_report() -> str:
+    lines: list[str] = []
+    for guild in core.bot.guilds:
+        me = guild.me
+        if me is None:
+            continue
+        lines.append(f"**{guild.name}** — role position {me.top_role.position} ({me.top_role.name})")
+        missing = [p for p in _GUILD_NEEDS if not getattr(me.guild_permissions, p)]
+        lines.append("Server-wide: " + ("✅ all needed permissions" if not missing else "❌ missing " + ", ".join(missing)))
+        if not me.guild_permissions.administrator:
+            for lvl, rid in (core.config.get("XPRoleRewards") or {}).items():
+                role = guild.get_role(int(rid))
+                if role is None:
+                    lines.append(f"❌ rank role for level {lvl} ({rid}) does not exist")
+                elif role >= me.top_role:
+                    lines.append(f"❌ rank role **{role.name}** is above my role — I cannot grant it")
+        for key, label, needs in _CHANNEL_NEEDS:
+            cid = core.cfg_int(key)
+            if not cid:
+                continue
+            ch = guild.get_channel(cid) or guild.get_thread(cid)
+            if ch is None:
+                lines.append(f"❌ {label} ({cid}): not found or not visible to me")
+                continue
+            perms = ch.permissions_for(me)
+            lacking = [p for p in needs if not getattr(perms, p)]
+            lines.append(f"{'✅' if not lacking else '❌'} {label} <#{cid}>" + (f": missing {', '.join(lacking)}" if lacking else ""))
+        if not core.bot.intents.message_content:
+            lines.append("❌ Message Content intent is off")
+    return "\n".join(lines) or "Not in any server."
 
 
 async def handle_bot_command(message: discord.Message) -> bool:
@@ -204,6 +251,12 @@ async def handle_bot_command(message: discord.Message) -> bool:
             await ch.send(chunk, allowed_mentions=discord.AllowedMentions.none())
         return True
 
+    if cmd == "!checkperms":
+        report = permission_report()
+        for chunk in core.chunks(report):
+            await ch.send(chunk)
+        return True
+
     if cmd == "!help":
         help_text = (
             "**Commands** (DM or mod channel):\n"
@@ -214,6 +267,7 @@ async def handle_bot_command(message: discord.Message) -> bool:
             "`!search <term>` — search messages (last 24h)\n"
             "`!note <user> <text>` — add a note to a user's record\n"
             "`!record <user>` — show a user's record (flags, honeypot trips, notes)\n"
+            "`!checkperms` — verify the bot's permissions in every configured channel\n"
             "`!help` — this message\n"
             "Public: `!rank [user]`, `!top`; slash: `/ask`, `/wiki`, `/lore`; right-click → Apps → Translate"
         )

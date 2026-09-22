@@ -20,7 +20,7 @@ The language model (via OpenRouter) is used only for grounded tasks: `/ask`, `/l
 * **Translate** — right-click a message → Apps → Translate, into the user's Discord language, shown only to them.
 * **Daily digest** — a summary of the day's activity DM'd to the owner; `!summary [Nh]` on demand.
 
-Mod commands work in DMs or the mod channel: `!help`, `!summary`, `!activity`, `!whois`, `!flags`, `!search`, `!note`, `!record`; owner: `!reload`.
+Mod commands work in DMs or the mod channel: `!help`, `!summary`, `!activity`, `!whois`, `!flags`, `!search`, `!note`, `!record`, `!checkperms` (reports missing permissions per configured channel and rank roles above the bot); owner: `!reload`.
 
 ## Setup
 
@@ -37,7 +37,7 @@ Config is read from `$BOT_CONFIG`, else `Config.json`, else `Barnabus.json`. It 
 1. Developer Portal → New Application → Bot. Copy the token into the config.
 2. Privileged intents: **Message Content** (required). **Server Members** only if you set `EnableMembersIntent` (needed for `!whois` by name).
 3. Invite with scopes `bot` + `applications.commands` and these permissions: View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Add Reactions, Manage Messages, Manage Roles, Manage Channels, Ban Members, Kick Members, View Audit Log.
-4. Put the bot's role **above** every rank role it hands out, and give it access to the mod, mod-log, highlights and stats channels.
+4. Put the bot's role **above** every rank role it hands out, and give it access to the mod, mod-log, honeypot, highlights, questions-forum and stats channels. The invite grants server-wide permissions, but a private channel that hides `@everyone` also hides the bot until its role gets an override there. Run `!checkperms` in the mod channel to see exactly what is missing; the same report is written to the log at startup.
 5. `AppCommandGuildID` makes slash commands register instantly for that server; leave `0` for global (up to an hour).
 
 ## Files

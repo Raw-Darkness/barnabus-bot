@@ -10,7 +10,7 @@ import discord
 
 from . import core, lore, faq, stats, summary
 from . import wiki, translate, highlights  # noqa: F401  (register commands/events)
-from .commands import handle_bot_command
+from .commands import handle_bot_command, permission_report
 from .moderation import check_flood, check_spam, honeypot_guard
 from .safety import monitor_message
 from .xp import award_xp, handle_xp_command
@@ -25,6 +25,10 @@ async def on_ready():
     logging.info("READY as %s (id=%s) pid=%s", core.bot.user, getattr(core.bot.user, "id", "?"), os.getpid())
     if not _started:
         _started = True
+        try:
+            logging.info("Permission check:\n%s", permission_report().replace("**", ""))
+        except Exception:
+            logging.exception("Permission check failed")
         for coro in (_config_watch(), _sync_commands(), _faq_loop(), stats.loop(), summary.scheduler()):
             core.bot.loop.create_task(coro)
 
