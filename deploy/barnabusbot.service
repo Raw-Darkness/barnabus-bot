@@ -1,0 +1,16 @@
+[Unit]
+Description=Barnabus moderation bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=barnabus
+WorkingDirectory=/opt/barnabus
+ExecStart=/opt/barnabus/venv/bin/python -m barnabus
+Restart=always
+RestartSec=5
+# 78 = rejected/missing token: a human has to fix it, so do not restart-loop.
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+# real config & secrets — never commit
+Config.json
+Barnabus.json
+.env
+
+# runtime state & user data
+app.log*
+*.db
+*.db-*
+.summary_last_run
+
+# server-specific content
+world_lore*
+game_faq*
+
+__pycache__/
+*.pyc
+.claude/
