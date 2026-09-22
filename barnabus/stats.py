@@ -20,7 +20,16 @@ async def update() -> None:
     mid = core.cfg_int("StatsMemberChannelID")
     if mid:
         ch = core.bot.get_channel(mid)
-        count = getattr(getattr(ch, "guild", None), "member_count", None)
+        count = None
+        if ch is not None:
+            # The cached member_count only updates with the privileged Members
+            # intent; asking Discord for the guild with counts is always current.
+            try:
+                g = await core.bot.fetch_guild(ch.guild.id, with_counts=True)
+                count = g.approximate_member_count
+            except Exception:
+                logging.exception("Stats: could not fetch member count")
+            count = count or getattr(ch.guild, "member_count", None)
         if count:
             await _rename(mid, str(core.config.get("StatsMemberTemplate", "members-{count}")).format(count=count))
     pid, appid = core.cfg_int("StatsPlayersChannelID"), core.cfg_int("SteamAppID")
