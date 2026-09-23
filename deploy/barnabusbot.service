@@ -5,12 +5,17 @@ Wants=network-online.target
 
 [Service]
 User=barnabus
-WorkingDirectory=/opt/barnabus
+WorkingDirectory=/opt/barnabus/app
 ExecStart=/opt/barnabus/venv/bin/python -m barnabus
 Restart=always
 RestartSec=5
-# 78 = rejected/missing token: a human has to fix it, so do not restart-loop.
+# 78 = rejected/missing token or unapproved intent: a human has to fix it.
 RestartPreventExitStatus=78
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/barnabus
 
 [Install]
 WantedBy=multi-user.target

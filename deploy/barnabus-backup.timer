@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly Barnabus backup
+
+[Timer]
+OnCalendar=*-*-* 03:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

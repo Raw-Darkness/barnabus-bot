@@ -98,5 +98,7 @@
     "DailySummaryEnabled": false,
     "SummaryHour": 8,
     "SummaryTimezone": "Europe/Stockholm",
-    "SummaryMaxPerChannel": 500
+    "SummaryMaxPerChannel": 500,
+    "HeartbeatURL": "",
+    "HeartbeatIntervalSec": 120
 }

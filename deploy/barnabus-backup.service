@@ -1,0 +1,7 @@
+[Unit]
+Description=Back up the Barnabus database, key and content
+
+[Service]
+Type=oneshot
+User=barnabus
+ExecStart=/opt/barnabus/app/deploy/backup.sh

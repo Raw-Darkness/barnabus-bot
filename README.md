@@ -51,10 +51,19 @@ Config is read from `$BOT_CONFIG`, else `Config.json`, else `Barnabus.json`. It 
 | `world_lore.txt` | markdown lore, `##`/`###` sections | no |
 | `app.log` | rotating daily log | no |
 
+`HeartbeatURL` (optional) is pinged every `HeartbeatIntervalSec` while the bot is connected, for an external uptime monitor such as healthchecks.io.
+
 ## Privacy
 
 What the bot stores, what leaves the machine and for how long is in [Privacy.md](Privacy.md).
 
 ## Deploying
 
-See [deploy/VPS.md](deploy/VPS.md) for a systemd install on a small Linux VPS. The bot needs only outbound network access.
+Production runs on a small Hetzner Cloud server with systemd. Pushes to `master` are tested in GitHub Actions and deployed automatically once green, with rollback if the bot fails to come up. Setup, backups, monitoring and day-to-day operations are in [deploy/VPS.md](deploy/VPS.md).
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```

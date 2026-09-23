@@ -1,0 +1,8 @@
+[Unit]
+Description=Deploy the latest CI-passing Barnabus commit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/barnabus/app/deploy/update.sh

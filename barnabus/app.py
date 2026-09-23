@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 
+import aiohttp
 import discord
 
 from . import core, db, lore, faq, stats, summary
@@ -29,7 +30,7 @@ async def on_ready():
             logging.info("Permission check:\n%s", permission_report().replace("**", ""))
         except Exception:
             logging.exception("Permission check failed")
-        for coro in (_config_watch(), _sync_commands(), _faq_loop(), stats.loop(), summary.scheduler(), _expire_loop()):
+        for coro in (_config_watch(), _sync_commands(), _faq_loop(), stats.loop(), summary.scheduler(), _expire_loop(), _heartbeat()):
             core.bot.loop.create_task(coro)
 
 
@@ -103,6 +104,21 @@ async def _faq_loop():
         except Exception:
             logging.exception("FAQ scan failed")
         await asyncio.sleep(600)
+
+
+async def _heartbeat():
+    """Ping an external monitor (e.g. healthchecks.io) while connected. When the
+    pings stop — process dead, machine down, network gone — the monitor alerts."""
+    await core.bot.wait_until_ready()
+    while not core.bot.is_closed():
+        url = str(core.config.get("HeartbeatURL") or "")
+        if url and core.bot.is_ready():
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
+                    await s.get(url)
+            except Exception as e:
+                logging.warning("Heartbeat ping failed: %s", e)
+        await asyncio.sleep(max(30, core.cfg_int("HeartbeatIntervalSec", 120)))
 
 
 async def _expire_loop():
