@@ -26,6 +26,7 @@ async def on_ready():
     logging.info("READY as %s (id=%s) pid=%s", core.bot.user, getattr(core.bot.user, "id", "?"), os.getpid())
     if not _started:
         _started = True
+        _signals()
         try:
             logging.info("Permission check:\n%s", permission_report().replace("**", ""))
         except Exception:
@@ -151,7 +152,9 @@ async def _config_watch():
 
 
 def _signals():
-    loop = asyncio.get_event_loop()
+    # Called from on_ready, inside the running loop. Python 3.14 no longer
+    # creates a loop on demand, so asking for one before bot.run() fails.
+    loop = asyncio.get_running_loop()
 
     def _shutdown(sig):
         logging.info("Received %s — closing.", sig.name)
@@ -166,7 +169,6 @@ def _signals():
 
 def main() -> None:
     lore.load_lore()
-    _signals()
     token = core.config.get("DiscordToken") or ""
     if not token:
         logging.error("No DiscordToken in %s.", core.CONFIG_PATH)

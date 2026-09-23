@@ -51,3 +51,22 @@ def test_secrets_from_environment(monkeypatch):
     finally:
         core.config.clear()
         core.config.update(saved)
+
+
+def test_main_starts_without_a_running_loop(monkeypatch):
+    """main() runs before any event loop exists. Python 3.14 raises if startup code
+    asks for a loop at that point, which crash-looped the first production start."""
+    from barnabus import app
+    started = []
+    monkeypatch.setattr(core.bot, "run", lambda token: started.append(token))
+    core.config["DiscordToken"] = "x"
+    app.main()
+    assert started == ["x"]
+
+
+def test_signal_handlers_install_inside_the_loop():
+    from barnabus import app
+
+    async def inside():
+        app._signals()
+    asyncio.run(inside())
