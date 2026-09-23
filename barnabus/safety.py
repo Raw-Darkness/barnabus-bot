@@ -197,6 +197,23 @@ def _is_hard_match(matched: str) -> bool:
     return (" + " not in m and " near " not in m and not m.startswith(("age ", "stated age")))
 
 
+# Members paste prompts copied from the bot's own "Prompt" button or from image
+# metadata, which include the NEGATIVE prompt — and ours names exactly the terms the
+# filter blocks ("(child:2), (loli:2)"). The negative section is cut off before the
+# text is checked or used, and never used as a negative either: a member-supplied
+# negative such as "(adult:2)" would push images younger.
+_PASTED_NEGATIVE_RE = re.compile(r"(\*\*)?\s*\bnegative(\s+prompt)?\s*:", re.I)
+
+
+def strip_pasted_negative(text: str) -> str:
+    text = text or ""
+    m = _PASTED_NEGATIVE_RE.search(text)
+    if m:
+        text = text[:m.start()]
+    text = re.sub(r"^\s*(\*\*)?\s*prompt\s*:\s*(\*\*)?", "", text, flags=re.I)
+    return text.replace("```", " ").strip(" \n\t,")
+
+
 # ---- Monitor -----------------------------------------------------------------
 # Recent message texts per channel, so an age stated a few messages earlier still
 # counts when the sexual turn arrives (same split-turn defence as the chat bot).
@@ -228,7 +245,7 @@ def monitor_scope(message: discord.Message) -> bool:
 
 async def monitor_message(message: discord.Message) -> bool:
     """Scan one message. Returns True if it was flagged. Never deletes, never replies."""
-    text = (message.content or "").strip()
+    text = strip_pasted_negative(message.content or "")
     if not text or not monitor_scope(message):
         return False
     ch = core.channel_key(message)

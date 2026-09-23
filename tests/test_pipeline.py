@@ -61,3 +61,15 @@ def test_flood_detection(monkeypatch):
     u = author(43)
     results = [asyncio.run(moderation.check_flood(msg("buy cheap gold at my site now", u, Chan(60 + i)))) for i in range(3)]
     assert results == [False, False, True]
+
+
+def test_pasted_negative_prompt_is_not_flagged(monkeypatch):
+    alerts = []
+
+    async def fake_flag(title, details, ping=True):
+        alerts.append(title)
+    monkeypatch.setattr(moderation, "flag_to_mods", fake_flag)
+    pasted = "**Prompt:**\n```giant orc, green skin```\n**Negative:** (child:2), (loli:2), bad anatomy"
+    assert asyncio.run(safety.monitor_message(msg(pasted, author(44), Chan(70)))) is False
+    assert alerts == []
+    assert asyncio.run(safety.monitor_message(msg("**Prompt:** a loli\n**Negative:** blurry", author(44), Chan(71)))) is True
