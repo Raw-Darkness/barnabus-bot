@@ -4,7 +4,7 @@
 Reads an API token from $HCLOUD_TOKEN_FILE (default ~/.config/hcloud-barnabus.token).
 Creates: the SSH key, a firewall allowing only SSH and ping inbound, the cheapest
 current shared x86 server with at least 2 GB RAM in the chosen location, running
-Ubuntu 24.04, with Hetzner's daily server backups enabled. Prints the IPv4.
+Ubuntu 26.04, with Hetzner's daily server backups enabled. Prints the IPv4.
 
     deploy/hetzner_create.py [--location hel1] [--pubkey ~/.ssh/id_ed25519.pub] [--dry-run]
 """
@@ -67,7 +67,7 @@ def main():
 
     price, stype, cores, mem, disk = pick_type(token, a.location)
     print(f"plan: {stype} ({cores} vCPU, {mem:g} GB RAM, {disk} GB disk) in {a.location}, "
-          f"€{price:.2f}/month + 20% for backups, Ubuntu 24.04")
+          f"€{price:.2f}/month + 20% for backups, Ubuntu 26.04")
     if a.dry_run:
         return
 
@@ -87,7 +87,7 @@ def main():
         ]})["firewall"]
 
     res = call(token, "POST", "/servers", {
-        "name": NAME, "server_type": stype, "image": "ubuntu-24.04", "location": a.location,
+        "name": NAME, "server_type": stype, "image": "ubuntu-26.04", "location": a.location,
         "ssh_keys": [key["id"]], "firewalls": [{"firewall": fw["id"]}], "labels": LABELS,
         "public_net": {"enable_ipv4": True, "enable_ipv6": True},
     })

@@ -8,11 +8,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ["3.12", "3.14"]   # 3.14 = production server (Ubuntu 26.04); 3.12 = container image
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"   # matches the production server (Ubuntu 24.04)
+          python-version: ${{ matrix.python }}
           cache: pip
       - run: pip install -r requirements-dev.txt
       - run: python -m compileall -q barnabus

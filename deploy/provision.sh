@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-time setup of a fresh Ubuntu 24.04 server for Barnabus. Safe to re-run.
+# One-time setup of a fresh Ubuntu 26.04 server for Barnabus. Safe to re-run.
 # Leaves the bot enabled but NOT started: copy the data in first (see VPS.md).
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
