@@ -1,0 +1,6 @@
+*
+!barnabus/
+!requirements.txt
+!Config.example.json
+!deploy/backup.sh
+**/__pycache__

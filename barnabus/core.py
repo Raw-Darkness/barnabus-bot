@@ -43,6 +43,11 @@ def load_config() -> None:
     global config_mtime
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
+    # Secrets may come from the environment instead of the file, which is how
+    # container platforms (Fly, Railway, Render) hand them over.
+    for key, env in (("DiscordToken", "DISCORD_TOKEN"), ("OpenAPIKey", "OPENROUTER_API_KEY")):
+        if os.environ.get(env):
+            data[key] = os.environ[env]
     config.clear()
     config.update(data)
     config_mtime = os.path.getmtime(CONFIG_PATH)

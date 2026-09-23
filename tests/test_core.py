@@ -38,3 +38,16 @@ def test_parse_user_ref():
     assert core.parse_user_ref("<@!456>") == 456
     assert core.parse_user_ref("789") == 789
     assert core.parse_user_ref("bob") is None
+
+
+def test_secrets_from_environment(monkeypatch):
+    monkeypatch.setenv("DISCORD_TOKEN", "env-token")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
+    saved = dict(core.config)
+    try:
+        core.load_config()
+        assert core.config["DiscordToken"] == "env-token"
+        assert core.config["OpenAPIKey"] == "env-key"
+    finally:
+        core.config.clear()
+        core.config.update(saved)

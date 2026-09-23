@@ -17,3 +17,11 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m compileall -q barnabus
       - run: python -m pytest -q
+
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t barnabus:ci .
+      - name: import smoke test
+        run: docker run --rm -e BOT_CONFIG=/app/Config.example.json barnabus:ci python -c "import barnabus.app"
