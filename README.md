@@ -67,3 +67,14 @@ Production runs on a small Hetzner Cloud server with systemd. Pushes to `master`
 pip install -r requirements-dev.txt
 python -m pytest -q
 ```
+
+## Local bug investigations
+
+An optional, disabled-by-default [bug review bridge](deploy/BUG_REVIEW.md) exports
+encrypted, time-limited reports from configured Discord forums for local investigation and accepts Markdown suggestions
+only for internal bug threads. Public reports are read-only for this bridge.
+The workstation uses SSH, never a production bot token; Unreal stays local.
+
+Bug review setup requires a workstation-only export private key, an encrypted local
+drive, and independent retention cleanup jobs. The server stores no plaintext report
+queue and never receives the export private key.

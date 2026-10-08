@@ -1,0 +1,11 @@
+[Unit]
+Description=Check bug-report retention every minute, including while the bot is disabled
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+AccuracySec=1s
+Unit=barnabus-review-cleanup.service
+
+[Install]
+WantedBy=timers.target

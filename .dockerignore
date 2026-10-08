@@ -4,3 +4,8 @@
 !Config.example.json
 !deploy/backup.sh
 **/__pycache__
+
+!tools/
+tools/*
+!tools/bug_review_send.py
+!tools/bug_review_cleanup.py

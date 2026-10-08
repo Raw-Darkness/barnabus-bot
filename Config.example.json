@@ -100,5 +100,16 @@
     "SummaryTimezone": "Europe/Stockholm",
     "SummaryMaxPerChannel": 500,
     "HeartbeatURL": "",
-    "HeartbeatIntervalSec": 120
+    "HeartbeatIntervalSec": 120,
+    "BugReviewEnabled": false,
+    "BugReviewPostingEnabled": false,
+    "BugReviewGuildID": 0,
+    "BugReviewInternalForumIDs": [],
+    "BugReviewPublicForumIDs": [],
+    "BugReviewDirectory": "bug-review",
+    "BugReviewScanIntervalSec": 900,
+    "BugReviewThreadsPerForum": 100,
+    "BugReviewMessagesPerThread": 100,
+    "BugReviewSharedAccess": false,
+    "BugReviewPublicKeyPath": ""
 }

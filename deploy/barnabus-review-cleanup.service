@@ -1,0 +1,12 @@
+[Unit]
+Description=Expire Barnabus bug report exports independently of the bot
+
+[Service]
+Type=oneshot
+User=barnabus
+WorkingDirectory=/opt/barnabus/app
+ExecStart=/opt/barnabus/venv/bin/python /opt/barnabus/app/tools/bug_review_cleanup.py --config /opt/barnabus/app/Barnabus.json
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+LimitCORE=0
