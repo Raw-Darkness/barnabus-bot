@@ -26,3 +26,7 @@ bug-review-client.json
 .test-temp*/
 .pytest_cache/
 bug-review-local/
+
+# Bug review encryption keys (generate outside the checkout)
+*.private.pem
+review-private.pem

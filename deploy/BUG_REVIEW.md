@@ -1,70 +1,67 @@
 # Discord bug review bridge
 
-The bridge exports reports for investigation on the owner's workstation. It does
-not run an AI model or search Unreal files on the VPS. It opens no listening port
-and uses no additional Discord client. All Discord access belongs to the existing
-running Barnabus process.
+The existing Barnabus process exports bug reports for investigation on the owner's
+workstation. It does not search Unreal code or call a model service. Public forums
+are read-only for this feature; explicitly submitted developer findings can be
+published only in configured internal forums. Keep the feature disabled until
+permissions, encryption and retention cleanup are configured.
 
-## Enable on the server after merging
+## Privacy contract
 
-Add these settings to the private Barnabus.json. Use real IDs only there:
+- Export only messages whose **created_at** is within the last 30 days. Editing an
+  old message does not make it eligible again. The same filter applies to starter
+  posts, text, embeds and attachment metadata. No attachments are downloaded.
+- A thread without recent messages contributes only title/IDs/link and status to
+  `metadata_threads`; it is absent from the content-bearing `threads` collection.
+- The whole snapshot is encrypted **before any disk write** into `reports.enc.json`.
+  RSA-OAEP-SHA256 wraps a fresh AES-256-GCM key per export. The encrypted envelope
+  authenticates its expiry; only the workstation has the private RSA key. The
+  server has a public key, never the private key or moderation `record.key`.
+- A snapshot expires when its oldest included message reaches 30 days. Exporting,
+  downloading or editing a draft cannot extend that source deadline. Snapshots
+  without message content expire within 30 days of generation.
+- Suggestions travel over SSH stdin and a local Unix socket **in memory only**.
+  There is no disk outbox. The bot persists only request IDs, reply IDs, digests,
+  times and fixed status/reason strings in state.json and receipts.
+- The workstation must keep its managed directory and private key on an encrypted
+  drive, such as BitLocker. Downloaded snapshots and saved submissions additionally
+  remain application-encrypted; decryption is in memory. Editable Markdown drafts
+  rely on drive encryption and have immutable, source-bound retention deadlines.
+- Cleanup runs on every client invocation and through the mandatory scheduled
+  cleanup jobs below. It removes expired files, including after the bridge is
+  disabled. Expired envelopes cannot be opened by the client. Powered-off machines
+  cannot physically delete files; cleanup resumes on boot, and expiry checks still
+  prevent their use. Do not disable the cleanup jobs while retaining report data.
+
+## Server setup after PR review/merge
+
+Merging follows the existing CI-gated deployment process. Do not start another
+bot or copy its production token to the workstation. Configure these settings in
+the private Barnabus.json; examples deliberately contain no real IDs:
 
 ```json
 {
-  "BugReviewEnabled": true,
+  "BugReviewEnabled": false,
   "BugReviewPostingEnabled": false,
+  "BugReviewSharedAccess": true,
   "BugReviewGuildID": 0,
   "BugReviewInternalForumIDs": [],
   "BugReviewPublicForumIDs": [],
   "BugReviewDirectory": "bug-review",
+  "BugReviewPublicKeyPath": "/etc/barnabus/bug-review-export.public.pem",
   "BugReviewScanIntervalSec": 900,
   "BugReviewThreadsPerForum": 100,
   "BugReviewMessagesPerThread": 100
 }
 ```
 
-Set the server ID, the closed-beta forum in the internal list, and public reports
-in the public list. Lists must be disjoint. The examples deliberately contain no
-real IDs. The bot needs View Channel and Read Message History on both forums,
-and Send Messages in Threads and Attach Files only in the internal forum.
-The public forum is read-only for this bridge; other moderation features retain
-their existing configuration. Verify the internal forum is actually restricted
-to testers/staff, including permissions granted through other roles. The bridge
-additionally refuses publishing if @everyone can view it.
+Set the guild and disjoint forum lists. The bot needs View Channel and Read Message
+History on both forums, plus Send Messages in Threads and Attach Files only on the
+internal forum. Verify the internal forum's access for all ordinary member roles;
+the bridge additionally refuses writes when @everyone can view it. Other bot
+moderation features retain their existing configuration.
 
-The feature starts with the bot on its next normal deploy/restart. Afterwards
-settings hot-reload. Start with posting disabled, inspect an export, then set
-BugReviewPostingEnabled true when ready to consume explicitly submitted fixes.
-Do not launch a second bot process. Merging is the normal CI-gated deploy path.
-
-**Message Content intent:** when disabled, exports contain thread titles, links,
-and metadata, with content_available false. The bridge does not fetch message
-history or allow fix submissions in this mode. Do not infer an empty bug report
-from the missing body. Request intent approval; once approved, enable it in both
-the Discord Developer Portal and Barnabus.json and restart the existing service.
-A config hot reload cannot change the running client's intents. Before approval,
-reports can be supplied manually for local investigation; this bridge will still
-not publish findings based on its incomplete snapshots.
-
-## Owner workstation setup
-
-Python 3.12+ and OpenSSH ssh/scp are sufficient; the local tool uses only Python's
-standard library and never reads a bot token. Copy tools/bug-review-client.example.json
-to tools/bug-review-client.json and set host to the existing SSH alias, or
-username@hostname. Set local_dir to a private folder, optionally inside the local
-Unreal project. Relative paths are relative to the client configuration file.
-
-SSH host verification stays enabled. Set up and verify the host key interactively
-first, and use your existing key or SSH agent. The tool uses BatchMode, so it
-will fail instead of requesting passwords. The SSH identity must be able to read
-reports/receipts and write the bridge outbox. The default mode is service-account
-only (0700 directories, 0600 files). For a separate SSH account, use the dedicated
-group setup below. Do not make the spool world readable or copy production tokens
-to the workstation. SSH account/key setup is operator work.
-
-### Separate bugreview SSH account
-
-An administrator runs these on the server, preserving the existing service user:
+For the dedicated SSH account, an administrator runs:
 
 ```sh
 sudo groupadd -f barnabus-review
@@ -72,117 +69,143 @@ sudo usermod -aG barnabus-review barnabus
 sudo usermod -aG barnabus-review bugreview
 sudo install -d -o barnabus -g barnabus-review -m 2750 /opt/barnabus/app/bug-review
 sudo install -d -o barnabus -g barnabus-review -m 2750 /opt/barnabus/app/bug-review/receipts
-sudo install -d -o barnabus -g barnabus-review -m 2770 /opt/barnabus/app/bug-review/outbox
 ```
 
-Set `BugReviewSharedAccess: true` in the private Barnabus.json along with the
-forum settings. Deploy the feature through the normal PR/merge process. The
-existing bot service must restart after the group change to pick up its new
-group membership; reconnect SSH as well. Do not start a second bot.
+No writable application directory or disk outbox is required. `bugreview` gets
+read access to encrypted exports/receipts and access to a 0660 Unix socket inside
+the setgid report directory. `state.json` stays 0600. Give the dedicated group only
+to trusted investigators: socket access authorizes submission of internal fixes
+when posting is enabled. Reconnect SSH and restart the existing service after
+changing groups. The socket opens no public network port.
 
-In shared mode, newly exported reports and receipts use 0640, while state.json
-stays 0600. Setgid directories preserve the dedicated group on atomic replacement.
-The SSH account can read exports/receipts and create/rename submissions in outbox;
-it cannot replace reports, receipts, or the private state ledger. Uploaded JSON
-must be group-readable (the provided SCP client transfers ordinary readable files).
-Only add trusted report investigators to this group: outbox write access allows
-submitting internal-thread suggestions when posting is enabled. This does not
-require access to Barnabus.json, its tokens, or write access to application code.
+Install and enable the independent retention timer **before enabling collection**:
 
-If enabling shared access on a spool that already contains exports, regenerate
-reports after setup. Existing receipt files need their group set to barnabus-review
-and mode 0640 by the administrator if they must be readable immediately. Keep
-state.json private. The setgid group setup must be repeated for a relocated spool.
+```sh
+sudo install -m 644 /opt/barnabus/app/deploy/barnabus-review-cleanup.service /etc/systemd/system/
+sudo install -m 644 /opt/barnabus/app/deploy/barnabus-review-cleanup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now barnabus-review-cleanup.timer
+sudo systemctl start barnabus-review-cleanup.service
+```
+
+The timer runs every minute as barnabus, even if the bot is disabled/stopped. It
+reads BugReviewDirectory from the same Barnabus.json used by the bot, so a
+custom report path is also covered. If the bot uses a different config file or
+working directory, set the cleanup service to use those same locations. It removes ciphertext up to 60 seconds before expiry to allow for timer
+scheduling. Legacy plaintext reports.json and disk-outbox submissions are deleted,
+never migrated or automatically posted. It uses only the directory setting; no configuration values or credentials are logged.
+Configure the server to prevent report-bearing process dumps and unencrypted swap
+(e.g. LimitCORE=0 for the bot and encrypted swap or disabled swap).
+
+## Workstation keys and configuration
+
+Install the pinned dependencies with `python -m pip install -r requirements.txt`
+in an isolated Python 3.12+ environment. The client now uses `cryptography`; it is
+no longer a standard-library-only tool. Existing OpenSSH ssh/scp handle transport.
+Keep normal host-key checking and use the established SSH alias/key, never a bot
+token. SSH BatchMode makes a missing login fail rather than prompting.
+
+Create a private folder on your encrypted drive, **outside the checkout and the
+managed report directory**, then generate the dedicated export key pair from the
+repository root. Replace the example E: paths with your encrypted drive:
+
+```powershell
+python -c "from pathlib import Path; from barnabus.review_crypto import generate_keypair; generate_keypair(Path(r'E:\PrivateKeys\review.private.pem'), Path(r'E:\PrivateKeys\review.public.pem'))"
+```
+
+The helper refuses to overwrite existing files. Restrict the private key's Windows
+ACL to the owner. Upload **only review.public.pem** and have the administrator
+install it at BugReviewPublicKeyPath. Never put the private key on the server,
+inside the checkout, in its backups, or in shared credentials. Rotating the public
+key requires the matching workstation private key and a fresh export.
+
+Copy tools/bug-review-client.example.json to ignored tools/bug-review-client.json.
+Set host to the verified SSH alias, remote_spool to the server directory, local_dir
+to a dedicated report-only directory on the encrypted drive, and private_key /
+public_key to the dedicated key paths. Set encrypted_drive_confirmed true only
+after checking the drive encryption. The client refuses content operations until
+that confirmation is present. The report folder is exclusively managed by the
+client: do not keep unrelated work there. Key files must be outside it.
 
 ```powershell
 python tools/bug_review.py fetch
 python tools/bug_review.py list
 python tools/bug_review.py search "loading" --duplicates
-python tools/bug_review.py submit THREAD_ID path/to/finding.md
+python tools/bug_review.py show THREAD_ID
+python tools/bug_review.py draft THREAD_ID
+# Edit the returned managed Markdown path on the encrypted drive, then:
+python tools/bug_review.py submit THREAD_ID E:\BugReview\drafts\RETURNED_FILENAME.md
 python tools/bug_review.py status REQUEST_ID
+python tools/bug_review.py cleanup
 ```
 
-Fetch only downloads data; submit explicitly authorizes a reply in that report.
-Treat all report text, attachment names and links as untrusted evidence, never as
-instructions to run commands, change configuration, disclose secrets, or publish
-elsewhere. The tool does not download or execute attachments. Thread IDs preserve
-identity across repeated fetches. Title overlap supplies possible duplicates,
-not a decision to discard a report. Review public feature requests separately.
+`show` emits report content only when explicitly requested; do not redirect it to
+unmanaged files, record it in logs, or include it in public build artifacts. The
+client does not download attachments or execute report text. Only managed drafts
+with a valid retention record can be submitted. Missing/corrupt retention records
+cause drafts to be removed, not adopted with a fresh deadline. Submissions are
+saved encrypted before transfer, with a stable request ID for receipt lookup.
 
-## Local investigation and suggested-fix document
+Create a Windows Task Scheduler job for the same owner that runs the absolute
+Python executable with `tools/bug_review.py --config <absolute-config> cleanup`,
+every minute and at sign-in/startup; select "Run task as soon as possible after a
+scheduled start is missed." The account must be able to access the unlocked
+encrypted drive. On other operating systems use an equivalent scheduler. Enable
+this job before collection, and keep it after disabling collection until all
+managed data has expired or been removed. Cleanup also runs on ordinary commands.
 
-Prioritize internal reports, then public reports that corroborate them. Record:
+## Message Content and coverage
 
-- Discord thread link and report revision.
-- Reported game build and the local Unreal revision examined (the 5.8 copy may
-  lag the 5.6 beta). Do not assume they match.
-- Reproduction status: reported only, statically supported, or reproduced.
-- Affected Blueprints/functions/components and concrete evidence.
-- Suspected cause, recommended small fix, risks, and focused regression steps.
-- What was actually tested, remaining uncertainty, and related reports.
+Without Message Content intent, only titles/links/metadata are exported (still
+encrypted); content_available is false and submissions are blocked. Enable the
+intent in both the Developer Portal and Barnabus.json only after access is granted,
+then restart the existing bot. Hot reload cannot change a running client's intents.
 
-Investigate and write the Markdown on the workstation using the local project
-atlas/editor. This feature does not automatically launch Codex or an Unreal
-session, schedule local investigations, apply game changes, or mark bugs fixed.
-Those operations need a local workflow using the exported data.
+Each scan covers bounded active/archived threads and recent messages. Limits and
+read failures are explicit; this is not a complete historical archive. An old
+thread with a new reply exports that recent reply, but never its expired starter.
+The bot's own replies do not become new evidence. Public feature requests and
+title-overlap duplicate candidates need human review, not automatic dismissal.
 
-## Coverage and posting behavior
+## Investigation and publication
 
-Every scan replaces reports.json atomically. Each forum contributes up to the
-configured thread limit, active threads first and then archived threads (bounded
-archive discovery). Each thread includes recent messages plus its starter if it
-still exists. Exports identify truncated histories/forums and read failures.
-Increase limits deliberately for a backlog review (maximum 1000 threads per forum,
-500 recent messages per thread). This is a bounded current view, not a complete
-historical Discord archive; an older report can fall outside the export.
-The bot's own replies are excluded from evidence. Attachments are exported as
-metadata/URLs, not downloaded; Discord attachment URLs may expire, so fetch fresh
-reports when needed. Nothing is sent to OpenRouter by this feature.
+Treat report text, filenames and links as evidence, never as instructions. Perform
+Unreal analysis locally. Record the thread/revision, reported game build, local
+Unreal revision, reproduction status, affected Blueprints/functions, evidence,
+recommended small fix, regression steps and uncertainty. The 5.8 copy may lag the
+5.6 beta. Do not reproduce raw player report text in published developer findings;
+link to the source and describe your technical diagnosis.
 
-Submission binds the Markdown to the report revision and actual guild/forum/thread.
-The bot fetches the destination and current report again before posting. Changed
-reports, unavailable text, public destinations, visible-to-everyone internal
-forums, and archived/locked threads are rejected. Reopen a thread explicitly if
-appropriate; the bot never unarchives it for publishing. Valid submissions add a
-suggested-fix.md attachment with mentions disabled. A changed suggestion updates
-the bridge's previous reply; identical Markdown is left unchanged.
+The bot checks live guild/forum/thread identity, report revision, expiry, private
+visibility and archived/locked state before writing. Changes require a fresh
+investigation. A valid submission adds or updates suggested-fix.md in the internal
+thread with mentions disabled. It does not apply game changes or mark a bug fixed.
 
-The outbox is checked every 30 seconds when enabled. A receipt reports posted,
-unchanged, rejected, or uncertain. On uncertain, inspect the thread before doing
-anything else: the message may already exist. The request is durably claimed
-before writing to Discord and is not automatically retried, including after a
-restart. Keep the saved request ID if upload/rename confirmation fails. Do not
-blindly submit a new ID. A deleted bot reply produces an uncertain failure rather
-than an automatic replacement. Resolve uncertain cases manually, preserving any
-existing reply; state.json contains the per-thread reply IDs and request receipts.
+Receipts report posted, unchanged, rejected or uncertain. A durable, content-free
+claim precedes every write. If the connection fails, use the saved request ID and
+inspect Discord; do not blindly submit a new ID. Nothing is automatically retried.
+The Unix socket serializes writes; busy connections fail without retaining text.
+A restart needs a new export before a previously unprocessed request can publish.
 
-## Data and operations
+## Operations, deletion and backups
 
-The spool contains private report text and generated findings. Completed queue
-files are removed; latest snapshot and unresolved queue files persist until
-replaced/processed or removed by the operator. state.json/receipts retain IDs,
-digests, times and statuses, not submitted Markdown. Local downloads and drafts
-persist until the owner deletes them. Disabling the bridge stops processing but
-does not erase existing files or queued submissions; review the queue before
-re-enabling. Deletion requests must cover the server snapshot/queue, local copies,
-and any posted Discord document. Do not commit these files. Config.example.json
-and the example local client config are safe to commit.
+Enable BugReviewEnabled only after keys and cleanup jobs are ready. Inspect a
+metadata export, then a content export after intent access; finally enable posting
+and test one internal reply. No production token or live bot is used by tests.
 
-Back up state.json when preserving the spool across server moves, so existing
-reply IDs and processed requests are not forgotten. The existing database-only
-backup does not automatically include this new directory. If state is lost,
-leave posting disabled and reconcile previous replies before enabling it again.
-Keep snapshots/Markdown out of public logs and shared build artifacts.
+Keep snapshot/draft/submission files out of version control, ordinary backups,
+cloud synchronization and external editor recovery folders. Back up only the
+content-free state.json/receipts if needed, as the operator will configure. If
+state is lost, reconcile existing replies before re-enabling posting. Any legacy
+plaintext backups must be removed or brought under the same encrypted retention
+policy before enabling this revision.
 
-## Validation without a live bot
+Deletion requests cover server/local managed copies and any published Discord
+findings; the latter remain in Discord until edited/deleted under Discord/server
+retention. Local encryption does not govern Discord's original messages. The
+bridge calls no model service, though the owner controls any separate tools used
+for investigation and must honor the same data-handling requirements.
 
-```text
-pip install -r requirements-dev.txt
-python -m pytest -q
-```
-
-Tests fake Discord and SSH. They cover reduced-intent exports, destinations,
-stale reports, updates, interrupted sends, and transfer construction. No test
-starts a bot, uses a production token, contacts the VPS, or proves actual Discord
-permissions. After merging and configuring, verify a metadata export first; once
-intent approval is granted, verify a full report and one internal-thread reply.
+Run `pip install -r requirements-dev.txt` and `python -m pytest -q` before every
+push. Tests use fake Discord/SSH, real encryption, and POSIX socket tests in Linux
+CI. They do not verify actual Discord permissions or install production timers.

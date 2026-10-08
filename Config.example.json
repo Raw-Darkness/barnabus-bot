@@ -110,5 +110,6 @@
     "BugReviewScanIntervalSec": 900,
     "BugReviewThreadsPerForum": 100,
     "BugReviewMessagesPerThread": 100,
-    "BugReviewSharedAccess": false
+    "BugReviewSharedAccess": false,
+    "BugReviewPublicKeyPath": ""
 }

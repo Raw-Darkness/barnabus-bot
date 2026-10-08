@@ -1,5 +1,8 @@
 {
   "host": "",
   "remote_spool": "/opt/barnabus/app/bug-review",
-  "local_dir": "../bug-review/local"
+  "local_dir": "../bug-review/local",
+  "private_key": "",
+  "public_key": "",
+  "encrypted_drive_confirmed": false
 }

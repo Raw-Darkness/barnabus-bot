@@ -8,19 +8,25 @@ import hashlib
 import io
 import json
 import logging
+import math
+import stat
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import discord
 
-from . import core
+from . import core, review_crypto
+from .review_retention import purge_server, WINDOW
 
 MAX_MARKDOWN = 64 * 1024
 REQUEST_ID = re.compile(r"^[0-9a-f]{32}$")
+MAX_REQUEST_BYTES = MAX_MARKDOWN * 6 + 4096
+_snapshot_index = {"threads": []}
+_submit_lock = None
 
 
 def settings():
@@ -40,11 +46,11 @@ def root():
         # The operator assigns a dedicated group before enabling shared access.
         # setgid keeps atomic replacement files in that group.
         path.chmod(0o2750)
-    for name in ("outbox", "receipts"):
+    for name in ("receipts",):
         child = path / name
         child.mkdir(exist_ok=True, mode=0o700)
         if shared:
-            child.chmod(0o2770 if name == "outbox" else 0o2750)
+            child.chmod(0o2750)
     return path
 
 
@@ -55,7 +61,7 @@ def write_json(path, data):
         f.flush()
         os.fsync(f.fileno())
     shared = core.config.get("BugReviewSharedAccess", False) is True
-    exported = path.name == "reports.json" or path.parent.name == "receipts"
+    exported = path.name == "reports.enc.json" or path.parent.name == "receipts"
     temp.chmod(0o640 if shared and exported else 0o600)
     temp.replace(path)
     if os.name != "nt":
@@ -109,6 +115,8 @@ async def export_thread(thread, source):
     cap = min(500, max(1, core.cfg_int("BugReviewMessagesPerThread", 100)))
     messages = []
     truncated = False
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=30)
     if content_available():
         # Latest replies are crucial for reopenings. Include the starter even
         # when the bounded recent-history window no longer contains it.
@@ -116,9 +124,9 @@ async def export_thread(thread, source):
         # Bound network reads even if the thread contains many bot replies.
         scanned = 0
         scan_limit = cap + 100
-        async for m in thread.history(limit=scan_limit):
+        async for m in thread.history(limit=scan_limit, after=cutoff, oldest_first=False):
             scanned += 1
-            if not core.bot.user or m.author.id != core.bot.user.id:
+            if cutoff < m.created_at <= now and (not core.bot.user or m.author.id != core.bot.user.id):
                 recent.append(m)
                 if len(recent) > cap:
                     break
@@ -126,11 +134,13 @@ async def export_thread(thread, source):
         recent = recent[:cap]
         if not any(m.id == thread.id for m in recent):
             try:
-                recent.append(await thread.fetch_message(thread.id))
+                starter = await thread.fetch_message(thread.id)
+                if cutoff < starter.created_at <= now:
+                    recent.append(starter)
             except discord.NotFound:
                 pass  # deleted starter, not an empty history
         for m in sorted(recent, key=lambda m: m.id):
-            if core.bot.user and m.author.id == core.bot.user.id:
+            if not cutoff < m.created_at <= now or (core.bot.user and m.author.id == core.bot.user.id):
                 continue  # our suggestions must not become new report evidence
             messages.append({
                 "id": str(m.id), "content": m.content or "",
@@ -144,7 +154,9 @@ async def export_thread(thread, source):
         "source": source, "title": thread.name,
         "url": f"https://discord.com/channels/{thread.guild.id}/{thread.id}",
         "archived": thread.archived, "locked": thread.locked,
-        "content_available": content_available(), "history_truncated": truncated,
+        "content_available": content_available() and bool(messages), "history_truncated": truncated,
+        "expires_at": min([datetime.fromisoformat(m["created_at"]).timestamp() + WINDOW
+                           for m in messages], default=now.timestamp() + WINDOW),
         "messages": messages,
     }
     report["revision"] = revision(report)
@@ -154,8 +166,15 @@ async def export_thread(thread, source):
 async def export_once():
     guild, internal, public = settings()
     cap = min(1000, max(1, core.cfg_int("BugReviewThreadsPerForum", 100)))
-    snapshot = {"schema": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
-                "content_available": content_available(), "threads": [], "forums": [], "errors": []}
+    global _snapshot_index
+    public_key = Path(core.config.get("BugReviewPublicKeyPath") or "")
+    if not public_key.is_file():
+        raise ValueError("Configure the workstation export public key before enabling collection")
+    purge_server(core.config.get("BugReviewDirectory") or "bug-review")
+    snapshot = {"schema": 2, "generated_at": datetime.now(timezone.utc).isoformat(),
+                "expires_at": time.time() + WINDOW,
+                "content_available": content_available(), "threads": [], "metadata_threads": [],
+                "forums": [], "errors": []}
     for fid in sorted(internal) + sorted(public):
         try:
             forum = await resolve_forum(fid, guild)
@@ -169,14 +188,26 @@ async def export_once():
                                        "exported_limit": cap})
             for thread in ordered[:cap]:
                 try:
-                    snapshot["threads"].append(await export_thread(thread, "internal" if fid in internal else "public"))
+                    report = await export_thread(thread, "internal" if fid in internal else "public")
+                    if report["messages"] and report["expires_at"] > time.time() + 60:
+                        snapshot["threads"].append(report)
+                        snapshot["expires_at"] = min(snapshot["expires_at"], report["expires_at"])
+                    else:
+                        # No recent content: keep only the permitted metadata.
+                        snapshot["metadata_threads"].append({k: report[k] for k in
+                            ("id", "guild_id", "forum_id", "source", "title", "url", "archived", "locked")})
                 except Exception:
                     snapshot["errors"].append({"thread_id": str(thread.id), "error": "read_failed"})
                     logging.warning("Bug review: could not export thread %s", thread.id)
         except Exception:
             snapshot["errors"].append({"forum_id": str(fid), "error": "read_failed"})
             logging.warning("Bug review: could not export forum %s", fid)
-    write_json(root() / "reports.json", snapshot)
+    envelope = review_crypto.seal(snapshot, public_key, snapshot["expires_at"])
+    write_json(root() / "reports.enc.json", envelope)
+    # Retain only identity/revision/expiry in memory for submission checks.
+    _snapshot_index = {"threads": [{k: r[k] for k in
+                       ("id", "guild_id", "forum_id", "revision", "content_available", "expires_at")}
+                      for r in snapshot["threads"]]}
     return snapshot
 
 
@@ -198,6 +229,12 @@ def validate_request(request, filename):
         raise ValueError("Markdown must contain 1 to 65536 UTF-8 bytes")
     if not re.fullmatch(r"[0-9a-f]{64}", str(request.get("report_revision", ""))):
         raise ValueError("Missing report revision")
+    now = time.time()
+    created, expires = request.get("created_at"), request.get("expires_at")
+    if (not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                for v in (created, expires)) or not created <= now < expires
+            or expires > created + WINDOW):
+        raise ValueError("Submission retention deadline is invalid or expired")
     return gid, fid, tid
 
 
@@ -205,7 +242,9 @@ async def publish(request, filename, snapshot, state):
     gid, fid, tid = validate_request(request, filename)
     reports = [r for r in snapshot.get("threads", []) if r["id"] == str(tid)
                and r["forum_id"] == str(fid) and r["guild_id"] == str(gid)]
-    if not reports or reports[0]["revision"] != request["report_revision"] or not reports[0]["content_available"]:
+    if (not reports or reports[0]["revision"] != request["report_revision"]
+            or not reports[0]["content_available"] or reports[0]["expires_at"] <= time.time()
+            or request["expires_at"] > reports[0]["expires_at"]):
         raise ValueError("Missing, stale, or content-restricted report; fetch and investigate again")
     # Resolve actual destination immediately before every write. The request's
     # source label and IDs are never sufficient authorization.
@@ -232,6 +271,8 @@ async def publish(request, filename, snapshot, state):
     attachment = discord.File(io.BytesIO(request["markdown"].encode("utf-8")), filename="suggested-fix.md")
     content = "Developer investigation — suggested fix attached. Validation status and limitations are in the document."
     options = {"allowed_mentions": discord.AllowedMentions.none()}
+    # Discord fetches may take time; never publish an expired request.
+    validate_request(request, filename)
     if message:
         await message.edit(content=content, attachments=[attachment], **options)
     else:
@@ -240,67 +281,114 @@ async def publish(request, filename, snapshot, state):
     return {"status": "posted", "message_id": str(message.id)}
 
 
-async def process_outbox():
-    if core.config.get("BugReviewPostingEnabled", False) is not True:
-        return
+async def submit_request(request):
+    """Consume a suggestion in memory. Only content-free receipts reach disk."""
+    if (core.config.get("BugReviewEnabled", False) is not True
+            or core.config.get("BugReviewPostingEnabled", False) is not True):
+        return {"status": "rejected", "reason": "Posting disabled"}
+    rid = request.get("id", "") if isinstance(request, dict) else ""
+    try:
+        validate_request(request, rid)
+    except (ValueError, TypeError, KeyError):
+        return {"status": "rejected", "reason": "Invalid or expired request"}
     path = root()
-    snapshot = read_json(path / "reports.json")
     state_path = path / "state.json"
     state = read_json(state_path) if state_path.exists() else {"requests": {}, "threads": {}}
-    candidates = (file for file in sorted((path / "outbox").glob("*.json"))
-                  if REQUEST_ID.fullmatch(file.stem) and file.is_file() and not file.is_symlink())
-    processed = 0
-    for file in candidates:
-        if processed >= 20:
-            break
-        processed += 1
-        rid = file.stem
-        if not REQUEST_ID.fullmatch(rid) or file.is_symlink():
-            continue
-        if rid in state["requests"]:
-            # A restart after Discord accepted a write but before persistence
-            # must not silently repeat it. 'uncertain' needs operator inspection.
-            write_json(path / "receipts" / file.name, state["requests"][rid])
-            file.unlink()
-            continue
-        try:
-            if file.stat().st_size > MAX_MARKDOWN * 6 + 4096:
-                raise ValueError("Request too large")
-            request = read_json(file)
-            validate_request(request, rid)
-        except OSError:
-            logging.warning("Bug review could not read request %s", rid)
-            continue
-        except (ValueError, KeyError, TypeError):
-            result = {"status": "rejected", "reason": "Invalid request"}
+    if rid in state["requests"]:
+        return state["requests"][rid]
+    state["requests"][rid] = {"status": "uncertain", "reason": "Inspect Discord before resubmitting", "time": time.time()}
+    write_json(state_path, state)
+    try:
+        result = await publish(request, rid, _snapshot_index, state)
+    except ValueError as e:
+        result = {"status": "rejected", "reason": str(e)}
+    except Exception:
+        result = {"status": "uncertain", "reason": "Discord or storage failure; inspect before resubmitting"}
+        logging.warning("Bug review submission %s has uncertain status", rid)
+    result["time"] = time.time()
+    state["requests"][rid] = result
+    write_json(state_path, state)
+    write_json(path / "receipts" / (rid + ".json"), result)
+    return result
+
+
+async def receive_submission(reader, writer):
+    global _submit_lock
+    try:
+        if _submit_lock is None:
+            _submit_lock = asyncio.Lock()
+        if _submit_lock.locked():
+            result = {"status": "rejected", "reason": "Another submission is processing; try later"}
         else:
-            state["requests"][rid] = {"status": "uncertain", "reason": "Inspect Discord before resubmitting", "time": time.time()}
-            write_json(state_path, state)  # durable claim BEFORE the Discord write
-            try:
-                result = await publish(request, rid, snapshot, state)
-            except ValueError as e:
-                result = {"status": "rejected", "reason": str(e)}
-            except Exception:
-                result = {"status": "uncertain", "reason": "Discord or storage failure; inspect before resubmitting"}
-                logging.warning("Bug review submission %s has uncertain status", rid)
-        result["time"] = time.time()
-        state["requests"][rid] = result
-        write_json(state_path, state)
-        write_json(path / "receipts" / file.name, result)
-        file.unlink()
+            async with _submit_lock:
+                line = await asyncio.wait_for(reader.readline(), timeout=15)
+                if len(line) > MAX_REQUEST_BYTES or not line.endswith(b"\n"):
+                    raise ValueError("Invalid request frame")
+                request = json.loads(line.decode("utf-8"))
+                result = await asyncio.wait_for(submit_request(request), timeout=45)
+        writer.write(json.dumps(result).encode() + b"\n")
+        await writer.drain()
+    except (ValueError, UnicodeError, asyncio.TimeoutError):
+        # Do not log decoder tracebacks: their messages may contain report text.
+        writer.write(b'{"status":"uncertain","reason":"Invalid request or timeout; check receipt"}\n')
+        await writer.drain()
+    except Exception:
+        logging.warning("Bug review submission transport failed")
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+async def start_listener():
+    path = root() / "bridge.sock"
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not stat.S_ISSOCK(path.stat().st_mode):
+            raise ValueError("Unsafe bridge socket path")
+        try:
+            _, writer = await asyncio.open_unix_connection(str(path))
+        except (ConnectionRefusedError, FileNotFoundError):
+            path.unlink(missing_ok=True)
+        else:
+            writer.close()
+            await writer.wait_closed()
+            raise ValueError("Another bridge listener is already running")
+    server = await asyncio.start_unix_server(receive_submission, path=str(path), limit=MAX_REQUEST_BYTES+1)
+    path.chmod(0o660 if core.config.get("BugReviewSharedAccess", False) is True else 0o600)
+    return server
 
 
 async def loop():
     await core.bot.wait_until_ready()
-    next_scan = 0
-    while not core.bot.is_closed():
-        if core.config.get("BugReviewEnabled", False) is True:
+    next_scan, failed_config, server, active_directory = 0, None, None, None
+    try:
+        while not core.bot.is_closed():
+            directory = core.config.get("BugReviewDirectory") or "bug-review"
+            signature = json.dumps({k: v for k, v in core.config.items() if k.startswith("BugReview")}, sort_keys=True)
             try:
-                settings()
-                if time.monotonic() >= next_scan:
-                    await export_once()
-                    next_scan = time.monotonic() + max(300, core.cfg_int("BugReviewScanIntervalSec", 900))
-                await process_outbox()
+                purge_server(directory)  # also runs when disabled or misconfigured
+                enabled = core.config.get("BugReviewEnabled", False) is True
+                if server and (not enabled or directory != active_directory):
+                    server.close()
+                    await server.wait_closed()
+                    server = None
+                    next_scan = 0
+                if enabled:
+                    settings()
+                    if signature != failed_config:
+                        next_scan = 0 if failed_config is not None else next_scan
+                    if time.monotonic() >= next_scan:
+                        await export_once()
+                        next_scan = time.monotonic() + max(300, core.cfg_int("BugReviewScanIntervalSec", 900))
+                    if server is None and os.name != "nt":
+                        server = await start_listener()
+                        active_directory = directory
+                failed_config = None
             except Exception:
-                logging.exception("Bug review bridge failed")
-        await asyncio.sleep(30)
+                if failed_config != signature:
+                    logging.warning("Bug review unavailable; check forum IDs, public key, and filesystem setup (details omitted)")
+                    failed_config = signature
+            await asyncio.sleep(30)
+    finally:
+        if server:
+            server.close()
+            await server.wait_closed()

@@ -1,11 +1,14 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
 
 import pytest
 
-from barnabus import bug_review as bridge, core
+from barnabus import bug_review as bridge, core, review_crypto
+import time
+import os
+import json
 
 
 class Forum:
@@ -32,7 +35,7 @@ class Thread:
         self.messages = [message(102), message(101), message(100)]
         self.send = AsyncMock(return_value=NS(id=999))
 
-    async def history(self, limit):
+    async def history(self, limit, **kwargs):
         for m in self.messages[:limit]:
             yield m
 
@@ -42,14 +45,22 @@ class Thread:
 
 def message(mid, author=42):
     return NS(id=mid, author=NS(id=author), content='Report ' + str(mid),
-              created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), edited_at=None, attachments=[], embeds=[])
+              created_at=datetime.now(timezone.utc) - timedelta(days=1), edited_at=None, attachments=[], embeds=[])
+
+
+@pytest.fixture(scope="module")
+def keys(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("review-keys")
+    private, public = directory/'review.private.pem', directory/'review.public.pem'
+    review_crypto.generate_keypair(private, public)
+    return private, public
 
 
 @pytest.fixture
-def env(monkeypatch, tmp_path):
+def env(monkeypatch, tmp_path, keys):
     for k, v in dict(BugReviewEnabled=True, BugReviewPostingEnabled=True,
                      BugReviewGuildID=1, BugReviewInternalForumIDs=[10], BugReviewPublicForumIDs=[20],
-                     BugReviewDirectory=str(tmp_path), EnableMessageContentIntent=True,
+                     BugReviewDirectory=str(tmp_path), BugReviewPublicKeyPath=str(keys[1]), EnableMessageContentIntent=True,
                      BugReviewMessagesPerThread=100, BugReviewThreadsPerForum=100).items():
         monkeypatch.setitem(core.config, k, v)
     guild = NS(id=1, default_role=NS(id=1))
@@ -67,12 +78,14 @@ def env(monkeypatch, tmp_path):
 
 def request(report):
     return dict(schema=1, id='a'*32, guild_id='1', forum_id='10', thread_id='100',
-                report_revision=report['revision'], markdown='# Finding\nSuspected cause; not reproduced.')
+                report_revision=report['revision'], markdown='# Finding\nSuspected cause; not reproduced.',
+                created_at=time.time(), expires_at=report['expires_at'])
 
 
 def prepare(env):
     report = asyncio.run(bridge.export_thread(env[1], 'internal'))
-    snapshot = dict(schema=1, threads=[report])
+    snapshot = dict(schema=2, threads=[report])
+    bridge._snapshot_index = snapshot
     return request(report), snapshot, dict(requests={}, threads={})
 
 
@@ -158,36 +171,30 @@ def test_post_and_deduplicate_and_update(env):
 
 def test_disabled_posting_does_not_consume_queue(env, monkeypatch):
     monkeypatch.setitem(core.config, 'BugReviewPostingEnabled', False)
-    asyncio.run(bridge.process_outbox())
+    assert asyncio.run(bridge.submit_request({})) == {"status":"rejected", "reason":"Posting disabled"}
     env[2].fetch_channel.assert_not_awaited()
 
 
-def test_outbox_claim_survives_uncertain_send(env):
+def test_claim_survives_uncertain_send_without_persisting_markdown(env):
     req, snap, state = prepare(env)
     path = bridge.root()
-    bridge.write_json(path/'reports.json', snap)
-    bridge.write_json(path/'outbox'/('a'*32+'.json'), req)
     async def failed_send(*a, **kw):
         assert bridge.read_json(path/'state.json')['requests']['a'*32]['status'] == 'uncertain'
         raise TimeoutError()
     env[1].send.side_effect = failed_send
-    asyncio.run(bridge.process_outbox())
-    receipt = bridge.read_json(path/'receipts'/('a'*32+'.json'))
+    receipt = asyncio.run(bridge.submit_request(req))
     assert receipt['status'] == 'uncertain'
-    bridge.write_json(path/'outbox'/('a'*32+'.json'), req)
-    asyncio.run(bridge.process_outbox())
+    assert asyncio.run(bridge.submit_request(req)) == receipt
     env[1].send.assert_awaited_once()
+    assert not (path/'outbox').exists()
+    assert all(b'Suspected cause' not in p.read_bytes() for p in path.rglob('*') if p.is_file())
 
 
 def test_restart_after_success_does_not_repost(env):
     req, snap, state = prepare(env)
-    path = bridge.root()
-    bridge.write_json(path/'reports.json', snap)
-    bridge.write_json(path/'outbox'/('a'*32+'.json'), req)
-    asyncio.run(bridge.process_outbox())
-    assert bridge.read_json(path/'receipts'/('a'*32+'.json'))['status'] == 'posted'
-    bridge.write_json(path/'outbox'/('a'*32+'.json'), req)
-    asyncio.run(bridge.process_outbox())
+    receipt = asyncio.run(bridge.submit_request(req))
+    assert receipt['status'] == 'posted'
+    assert asyncio.run(bridge.submit_request(req)) == receipt
     env[1].send.assert_awaited_once()
 
 
@@ -210,7 +217,7 @@ def test_overlapping_forums_fail_closed(env, monkeypatch):
 @pytest.mark.parametrize('flag', ['false', 1, [], None])
 def test_non_boolean_posting_flag_stays_disabled(env, monkeypatch, flag):
     monkeypatch.setitem(core.config, 'BugReviewPostingEnabled', flag)
-    asyncio.run(bridge.process_outbox())
+    asyncio.run(bridge.submit_request({}))
     env[2].fetch_channel.assert_not_awaited()
 
 
@@ -223,16 +230,16 @@ def test_own_reply_does_not_displace_full_history(env, monkeypatch):
     assert [m['id'] for m in after['messages']] == ['100', '102']
 
 
-def test_invalid_queue_paths_cannot_starve_valid_request(env):
+def test_legacy_plaintext_queue_is_removed_and_never_published(env):
     req, snap, state = prepare(env)
     path = bridge.root()
+    (path/'outbox').mkdir()
     bridge.write_json(path/'reports.json', snap)
-    for i in range(25):
-        (path/'outbox'/f'0-bad-{i}.json').write_text('{}')
-    (path/'outbox'/('0'*32+'.json')).mkdir()
     bridge.write_json(path/'outbox'/('a'*32+'.json'), req)
-    asyncio.run(bridge.process_outbox())
-    assert bridge.read_json(path/'receipts'/('a'*32+'.json'))['status'] == 'posted'
+    bridge.purge_server(path)
+    assert not (path/'reports.json').exists()
+    assert not list((path/'outbox').iterdir())
+    env[1].send.assert_not_awaited()
 
 
 def test_deleted_previous_reply_not_reported_unchanged(env):
@@ -266,23 +273,6 @@ def test_cdn_signature_refresh_is_not_changed_evidence(env):
     assert bridge.revision(report) != before
 
 
-def test_export_client_submission_receipt_roundtrip(env, tmp_path):
-    import importlib.util
-    from pathlib import Path
-    spec = importlib.util.spec_from_file_location('review_client_roundtrip', Path(__file__).parents[1]/'tools'/'bug_review.py')
-    client = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(client)
-    snapshot = asyncio.run(bridge.export_once())
-    markdown = tmp_path/'finding.md'
-    markdown.write_text('# Reproduction\nStatic analysis only.', encoding='utf-8')
-    req = client.build_request(snapshot, '100', markdown)
-    root = bridge.root()
-    bridge.write_json(root/'outbox'/(req['id']+'.json'), req)
-    asyncio.run(bridge.process_outbox())
-    assert bridge.read_json(root/'receipts'/(req['id']+'.json'))['status'] == 'posted'
-    env[1].send.assert_awaited_once()
-
-
 @pytest.mark.parametrize('shared', [False, True, 'false'])
 def test_export_file_modes_keep_state_private(env, monkeypatch, tmp_path, shared):
     from pathlib import Path
@@ -294,12 +284,184 @@ def test_export_file_modes_keep_state_private(env, monkeypatch, tmp_path, shared
         return original(path, mode, **kwargs)
     monkeypatch.setattr(Path, 'chmod', chmod)
     path = bridge.root()
-    for destination in (path/'reports.json', path/'state.json', path/'receipts'/'a.json'):
+    for destination in (path/'reports.enc.json', path/'state.json', path/'receipts'/'a.json'):
         bridge.write_json(destination, {})
-    assert seen[str(path/'reports.tmp')] == (0o640 if shared is True else 0o600)
+    assert seen[str(path/'reports.enc.tmp')] == (0o640 if shared is True else 0o600)
     assert seen[str(path/'receipts'/'a.tmp')] == (0o640 if shared is True else 0o600)
     assert seen[str(path/'state.tmp')] == 0o600
     if shared is True:
         assert seen[str(path)] == 0o2750
-        assert seen[str(path/'outbox')] == 0o2770
         assert seen[str(path/'receipts')] == 0o2750
+
+
+def test_old_starter_and_recently_edited_old_message_are_excluded(env):
+    old, edited, new = env[1].messages[2], env[1].messages[1], env[1].messages[0]
+    old.created_at = datetime.now(timezone.utc)-timedelta(days=31)
+    edited.created_at = datetime.now(timezone.utc)-timedelta(days=31)
+    edited.edited_at = datetime.now(timezone.utc)
+    report = asyncio.run(bridge.export_thread(env[1], 'internal'))
+    assert [m['id'] for m in report['messages']] == [str(new.id)]
+    assert report['expires_at'] == new.created_at.timestamp()+bridge.WINDOW
+
+
+def test_empty_old_thread_is_metadata_only_and_disk_is_encrypted(env, keys):
+    for m in env[1].messages:
+        m.created_at = datetime.now(timezone.utc)-timedelta(days=31)
+    snapshot = asyncio.run(bridge.export_once())
+    assert snapshot['threads'] == []
+    assert snapshot['metadata_threads'][0]['id'] == '100'
+    assert 'messages' not in snapshot['metadata_threads'][0]
+    encrypted = bridge.root()/'reports.enc.json'
+    assert 'Loading regression' not in encrypted.read_text(encoding='utf-8')
+    assert review_crypto.unseal(bridge.read_json(encrypted), keys[0]) == snapshot
+    assert not (bridge.root()/'reports.json').exists()
+
+
+def test_encrypted_export_expiry_not_refreshed_by_new_scan(env, keys):
+    oldest = datetime.now(timezone.utc)-timedelta(days=29)
+    env[1].messages[1].created_at = oldest
+    first = asyncio.run(bridge.export_once())
+    second = asyncio.run(bridge.export_once())
+    assert first['expires_at'] == second['expires_at'] == oldest.timestamp()+bridge.WINDOW
+    plain = review_crypto.unseal(bridge.read_json(bridge.root()/'reports.enc.json'), keys[0])
+    assert plain['threads'][0]['messages']
+    assert b'Report 101' not in (bridge.root()/'reports.enc.json').read_bytes()
+
+
+def test_cleanup_expires_ciphertext_even_with_disabled_feature(env, monkeypatch):
+    monkeypatch.setitem(core.config, 'BugReviewEnabled', False)
+    p=bridge.root()/'reports.enc.json'
+    bridge.write_json(p, {'expires_at':time.time()-1})
+    assert bridge.purge_server(bridge.root()) == 1
+    assert not p.exists()
+
+
+def test_expired_submission_rejected(env):
+    req, snap, state = prepare(env)
+    req['expires_at'] = time.time()-1
+    assert asyncio.run(bridge.submit_request(req))['status'] == 'rejected'
+    env[1].send.assert_not_awaited()
+
+
+def test_invalid_config_logs_once_until_config_changes(env, monkeypatch, caplog):
+    monkeypatch.setitem(core.config, 'BugReviewGuildID', 0)
+    env[2].wait_until_ready=AsyncMock()
+    count=0
+    env[2].is_closed=lambda:count>=4
+    async def sleep(_):
+        nonlocal count
+        count+=1
+        if count == 2:
+            core.config['BugReviewGuildID']=-1
+            core.config['BugReviewInternalForumIDs']=[]
+    monkeypatch.setattr(bridge.asyncio, 'sleep', sleep)
+    asyncio.run(bridge.loop())
+    assert sum('Bug review unavailable' in r.message for r in caplog.records) == 2
+
+
+@pytest.mark.skipif(os.name=='nt', reason='Production submission socket is POSIX-only')
+def test_unix_submission_socket_roundtrip(env):
+    req, snap, state=prepare(env)
+    async def run():
+        bridge._submit_lock=None
+        server=await bridge.start_listener()
+        try:
+            reader,writer=await asyncio.open_unix_connection(str(bridge.root()/'bridge.sock'))
+            writer.write(json.dumps(req).encode()+b'\n')
+            await writer.drain()
+            result=json.loads(await reader.readline())
+            writer.close()
+            await writer.wait_closed()
+            return result
+        finally:
+            server.close()
+            await server.wait_closed()
+    assert asyncio.run(run())['status']=='posted'
+    env[1].send.assert_awaited_once()
+
+
+def test_server_cleanup_uses_configured_spool(tmp_path):
+    import importlib.util
+    from pathlib import Path
+    spec=importlib.util.spec_from_file_location('cleanup_helper', Path(__file__).parents[1]/'tools'/'bug_review_cleanup.py')
+    helper=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    custom=tmp_path/'custom-spool'
+    custom.mkdir()
+    (custom/'reports.enc.json').write_text(json.dumps({'expires_at':time.time()-1}))
+    config=tmp_path/'private-config.json'
+    config.write_text(json.dumps({'BugReviewDirectory':str(custom), 'DiscordToken':'not-used'}))
+    assert helper.resolve_directory(config)==custom
+    assert helper.purge_server(helper.resolve_directory(config))==1
+    assert not (custom/'reports.enc.json').exists()
+
+
+def test_encrypted_export_client_draft_and_inmemory_publish_roundtrip(env, keys, tmp_path):
+    import importlib.util
+    from pathlib import Path
+    spec=importlib.util.spec_from_file_location('privacy_client_integration', Path(__file__).parents[1]/'tools'/'bug_review.py')
+    client=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(client)
+    old=Thread(env[1].guild)
+    old.id=200
+    old.messages=[message(200)]
+    old.messages[0].created_at=datetime.now(timezone.utc)-timedelta(days=31)
+    env[0].archives=[old]
+    asyncio.run(bridge.export_once())
+    config={'local_dir':tmp_path/'workstation', 'private_key':keys[0], 'public_key':keys[1],
+            'encrypted_drive_confirmed':True}
+    config['local_dir'].mkdir()
+    (config['local_dir']/client.SNAPSHOT).write_bytes((bridge.root()/'reports.enc.json').read_bytes())
+    snapshot=client.snapshot(config)
+    assert len(client.threads(snapshot))==2
+    draft=client.create_draft(config,snapshot,'100')
+    draft.write_text('# Finding\nStatic analysis only; original text not quoted.',encoding='utf-8')
+    request=client.build_request(snapshot,'100',draft,config['local_dir'],client._ledger(config['local_dir']))
+    saved=client.save_request(config,request)
+    assert b'Static analysis only' not in saved.read_bytes()
+    assert review_crypto.unseal(json.loads(saved.read_text(encoding='utf-8')),keys[0])==request
+    receipt=asyncio.run(bridge.submit_request(request))
+    assert receipt['status']=='posted'
+    assert all('messages' not in row for row in bridge._snapshot_index['threads'])
+    assert not (bridge.root()/'outbox').exists()
+    client.cleanup(config,now=request['expires_at']+1)
+    assert not saved.exists() and not draft.exists()
+    assert not (config['local_dir']/client.SNAPSHOT).exists()
+
+
+@pytest.mark.skipif(os.name=='nt', reason='Production SSH forwarding socket is POSIX-only')
+def test_ssh_helper_forwards_unicode_stdin_without_files(env):
+    from pathlib import Path
+    import sys
+    req,snapshot,state=prepare(env)
+    req['markdown']='# Finding\nUnicode: 🐉 åäö 日本語'
+    helper=Path(__file__).parents[1]/'tools'/'bug_review_send.py'
+    async def run():
+        bridge._submit_lock=None
+        server=await bridge.start_listener()
+        try:
+            proc=await asyncio.create_subprocess_exec(sys.executable,str(helper),str(bridge.root()/'bridge.sock'),
+                    stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+            out,err=await proc.communicate(json.dumps(req,ensure_ascii=False).encode('utf-8'))
+            assert proc.returncode==0,err.decode()
+            return json.loads(out)
+        finally:
+            server.close()
+            await server.wait_closed()
+    assert asyncio.run(run())['status']=='posted'
+    assert not (bridge.root()/'outbox').exists()
+    assert all(b'Unicode:' not in p.read_bytes() for p in bridge.root().rglob('*') if p.is_file())
+
+
+def test_created_at_boundary_and_future_timestamps(env, monkeypatch):
+    actual=datetime.now(timezone.utc)
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return actual
+    monkeypatch.setattr(bridge,'datetime',FixedDatetime)
+    env[1].messages[0].created_at=actual-timedelta(days=30)
+    env[1].messages[1].created_at=actual+timedelta(seconds=1)
+    env[1].messages[2].created_at=actual-timedelta(days=30)+timedelta(seconds=1)
+    report=asyncio.run(bridge.export_thread(env[1],'internal'))
+    assert [m['id'] for m in report['messages']]==['100']
