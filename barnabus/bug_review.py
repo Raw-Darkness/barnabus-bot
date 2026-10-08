@@ -34,9 +34,17 @@ def settings():
 
 def root():
     path = Path(core.config.get("BugReviewDirectory") or "bug-review")
+    shared = core.config.get("BugReviewSharedAccess", False) is True
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if shared:
+        # The operator assigns a dedicated group before enabling shared access.
+        # setgid keeps atomic replacement files in that group.
+        path.chmod(0o2750)
     for name in ("outbox", "receipts"):
-        (path / name).mkdir(exist_ok=True, mode=0o700)
+        child = path / name
+        child.mkdir(exist_ok=True, mode=0o700)
+        if shared:
+            child.chmod(0o2770 if name == "outbox" else 0o2750)
     return path
 
 
@@ -46,7 +54,9 @@ def write_json(path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
-    temp.chmod(0o600)
+    shared = core.config.get("BugReviewSharedAccess", False) is True
+    exported = path.name == "reports.json" or path.parent.name == "receipts"
+    temp.chmod(0o640 if shared and exported else 0o600)
     temp.replace(path)
     if os.name != "nt":
         fd = os.open(path.parent, os.O_RDONLY)

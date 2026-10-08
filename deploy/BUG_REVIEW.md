@@ -57,11 +57,42 @@ Unreal project. Relative paths are relative to the client configuration file.
 SSH host verification stays enabled. Set up and verify the host key interactively
 first, and use your existing key or SSH agent. The tool uses BatchMode, so it
 will fail instead of requesting passwords. The SSH identity must be able to read
-reports/receipts and write the bridge outbox as the barnabus service account.
-The bridge creates private directories (0700) and JSON files (0600). Prefer an
-appropriately restricted SSH key for that account; do not make the spool world
-readable or copy production tokens to the workstation. SSH account/key setup is
-operator work and is not changed by this PR.
+reports/receipts and write the bridge outbox. The default mode is service-account
+only (0700 directories, 0600 files). For a separate SSH account, use the dedicated
+group setup below. Do not make the spool world readable or copy production tokens
+to the workstation. SSH account/key setup is operator work.
+
+### Separate bugreview SSH account
+
+An administrator runs these on the server, preserving the existing service user:
+
+```sh
+sudo groupadd -f barnabus-review
+sudo usermod -aG barnabus-review barnabus
+sudo usermod -aG barnabus-review bugreview
+sudo install -d -o barnabus -g barnabus-review -m 2750 /opt/barnabus/app/bug-review
+sudo install -d -o barnabus -g barnabus-review -m 2750 /opt/barnabus/app/bug-review/receipts
+sudo install -d -o barnabus -g barnabus-review -m 2770 /opt/barnabus/app/bug-review/outbox
+```
+
+Set `BugReviewSharedAccess: true` in the private Barnabus.json along with the
+forum settings. Deploy the feature through the normal PR/merge process. The
+existing bot service must restart after the group change to pick up its new
+group membership; reconnect SSH as well. Do not start a second bot.
+
+In shared mode, newly exported reports and receipts use 0640, while state.json
+stays 0600. Setgid directories preserve the dedicated group on atomic replacement.
+The SSH account can read exports/receipts and create/rename submissions in outbox;
+it cannot replace reports, receipts, or the private state ledger. Uploaded JSON
+must be group-readable (the provided SCP client transfers ordinary readable files).
+Only add trusted report investigators to this group: outbox write access allows
+submitting internal-thread suggestions when posting is enabled. This does not
+require access to Barnabus.json, its tokens, or write access to application code.
+
+If enabling shared access on a spool that already contains exports, regenerate
+reports after setup. Existing receipt files need their group set to barnabus-review
+and mode 0640 by the administrator if they must be readable immediately. Keep
+state.json private. The setgid group setup must be repeated for a relocated spool.
 
 ```powershell
 python tools/bug_review.py fetch

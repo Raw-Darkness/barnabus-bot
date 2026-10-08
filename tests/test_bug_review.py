@@ -281,3 +281,25 @@ def test_export_client_submission_receipt_roundtrip(env, tmp_path):
     asyncio.run(bridge.process_outbox())
     assert bridge.read_json(root/'receipts'/(req['id']+'.json'))['status'] == 'posted'
     env[1].send.assert_awaited_once()
+
+
+@pytest.mark.parametrize('shared', [False, True, 'false'])
+def test_export_file_modes_keep_state_private(env, monkeypatch, tmp_path, shared):
+    from pathlib import Path
+    monkeypatch.setitem(core.config, 'BugReviewSharedAccess', shared)
+    seen = {}
+    original = Path.chmod
+    def chmod(path, mode, **kwargs):
+        seen[str(path)] = mode
+        return original(path, mode, **kwargs)
+    monkeypatch.setattr(Path, 'chmod', chmod)
+    path = bridge.root()
+    for destination in (path/'reports.json', path/'state.json', path/'receipts'/'a.json'):
+        bridge.write_json(destination, {})
+    assert seen[str(path/'reports.tmp')] == (0o640 if shared is True else 0o600)
+    assert seen[str(path/'receipts'/'a.tmp')] == (0o640 if shared is True else 0o600)
+    assert seen[str(path/'state.tmp')] == 0o600
+    if shared is True:
+        assert seen[str(path)] == 0o2750
+        assert seen[str(path/'outbox')] == 0o2770
+        assert seen[str(path/'receipts')] == 0o2750
