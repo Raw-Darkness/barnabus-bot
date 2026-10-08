@@ -17,3 +17,12 @@ game_faq*
 __pycache__/
 *.pyc
 .claude/
+
+# local tooling and private bug investigations
+.venv/
+bug-review/
+bug-review-client.json
+
+.test-temp*/
+.pytest_cache/
+bug-review-local/

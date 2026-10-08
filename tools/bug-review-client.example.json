@@ -1,0 +1,5 @@
+{
+  "host": "",
+  "remote_spool": "/opt/barnabus/app/bug-review",
+  "local_dir": "../bug-review/local"
+}

@@ -9,7 +9,7 @@ import sys
 import aiohttp
 import discord
 
-from . import core, db, lore, faq, stats, summary
+from . import core, db, lore, faq, stats, summary, bug_review
 from . import wiki, translate, highlights  # noqa: F401  (register commands/events)
 from .commands import handle_bot_command, permission_report
 from .moderation import check_flood, check_spam, honeypot_guard
@@ -31,7 +31,7 @@ async def on_ready():
             logging.info("Permission check:\n%s", permission_report().replace("**", ""))
         except Exception:
             logging.exception("Permission check failed")
-        for coro in (_config_watch(), _sync_commands(), _faq_loop(), stats.loop(), summary.scheduler(), _expire_loop(), _heartbeat()):
+        for coro in (_config_watch(), _sync_commands(), _faq_loop(), stats.loop(), summary.scheduler(), _expire_loop(), _heartbeat(), bug_review.loop()):
             core.bot.loop.create_task(coro)
 
 
