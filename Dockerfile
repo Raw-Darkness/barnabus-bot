@@ -14,7 +14,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY barnabus ./barnabus
-COPY tools ./tools
+COPY tools/bug_review_send.py tools/bug_review_cleanup.py ./tools/
 COPY Config.example.json deploy/backup.sh ./
 
 # Relative paths in the config (barnabus.db, record.key, game_faq.txt ...) resolve here.
